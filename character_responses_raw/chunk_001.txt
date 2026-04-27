@@ -1,0 +1,177 @@
+[
+  {
+    "name": "小文",
+    "aliases": ["男孩", "我"],
+    "features": "少年，长大后身高增加，传统家庭男孩。",
+    "personality": "单纯好奇、恋足癖好强烈、对母亲丝袜痴迷、逐渐觉醒性欲。",
+    "quote": "妈妈的脚好看又好闻。",
+    "motivation": "享受母亲的丝袜脚、闻足味、获得性快感。",
+    "relationships": [
+      {
+        "target_name": "陈萍",
+        "relation_type": "儿子，对母亲有强烈性依恋"
+      },
+      {
+        "target_name": "田莉",
+        "relation_type": "窥视对象"
+      }
+    ]
+  },
+  {
+    "name": "陈萍",
+    "aliases": ["妈妈", "熟妇", "萍姨", "熟妇萍姨的原味丝袜", "大姐", "小陈"],
+    "features": "43岁，中年熟妇，1米65，身材丰韵，前挺后翘变丰满，肉感十足的美腿，大腿浑圆丰满小腿不短，常穿肉色/咖啡色/灰色超薄裤袜和高跟鞋，普通容颜。",
+    "personality": "老实本分、爱美、逐渐接受并享受卖原味丝袜、宠爱儿子、内心柔软有魅力觉醒。",
+    "quote": "呵呵，这次怎么这么激动，丝袜都快被你磨破了，知道你喜欢这双丝袜，要不要停一下，再换双其它的丝袜？",
+    "motivation": "改善家庭经济、满足儿子足癖、享受被年轻男性欲望吸引的成就感。",
+    "relationships": [
+      {
+        "target_name": "小文",
+        "relation_type": "母亲，满足儿子丝袜脚需求"
+      },
+      {
+        "target_name": "田莉",
+        "relation_type": "同事转生意伙伴"
+      },
+      {
+        "target_name": "爸爸",
+        "relation_type": "前夫，出轨离婚"
+      },
+      {
+        "target_name": "年轻男人",
+        "relation_type": "客户，被足交"
+      },
+      {
+        "target_name": "网友们",
+        "relation_type": "原味丝袜买家"
+      }
+    ]
+  },
+  {
+    "name": "田莉",
+    "aliases": ["田阿姨", "田姐", "王姐"],
+    "features": "比陈萍大几岁，四十好几，矮胖，肉腿匀称，穿超薄黑丝T裆裤袜、黑色高跟鞋、短裙。",
+    "personality": "精明世故、热心拉拢他人做生意、开放接受原味丝袜交易。",
+    "quote": "小陈，我今天来就是想拉妹妹一把，当姐姐的怎么能看你这样下去呢？",
+    "motivation": "做原味丝袜中间商赚钱，拉陈萍入伙扩大生意。",
+    "relationships": [
+      {
+        "target_name": "陈萍",
+        "relation_type": "前同事、生意姐姐"
+      },
+      {
+        "target_name": "小文",
+        "relation_type": "阿姨"
+      },
+      {
+        "target_name": "李娟",
+        "relation_type": "丝袜供货人"
+      },
+      {
+        "target_name": "王芳",
+        "relation_type": "丝袜供货人"
+      },
+      {
+        "target_name": "沈丽",
+        "relation_type": "丝袜供货人"
+      }
+    ]
+  },
+  {
+    "name": "爸爸",
+    "aliases": ["你家男人"],
+    "features": "原机械厂上班，后自己创业。",
+    "personality": "沉默寡言、出轨不忠。",
+    "quote": "她比你年轻。",
+    "motivation": "追求年轻女人离婚。",
+    "relationships": [
+      {
+        "target_name": "陈萍",
+        "relation_type": "前夫"
+      },
+      {
+        "target_name": "小文",
+        "relation_type": "父亲，离婚后疏离"
+      },
+      {
+        "target_name": "那个女人",
+        "relation_type": "出轨对象"
+      }
+    ]
+  },
+  {
+    "name": "年轻男人",
+    "aliases": ["客户", "男人"],
+    "features": "年轻，勃起时裤裆明显。",
+    "personality": "饥渴冲动、恋足变态、对熟妇丝袜痴迷、得寸进尺。",
+    "quote": "大姐丝袜脚的味道好棒，我买过很多原味丝袜就大姐脚的味道最浓郁。",
+    "motivation": "购买并享用陈萍的原味丝袜脚，获得足交高潮。",
+    "relationships": [
+      {
+        "target_name": "陈萍",
+        "relation_type": "高价丝袜客户，进行足交"
+      },
+      {
+        "target_name": "田莉",
+        "relation_type": "丝袜供应商联系人"
+      }
+    ]
+  },
+  {
+    "name": "那个女人",
+    "aliases": ["一个女人"],
+    "features": "怀孕。",
+    "personality": "强势直接。",
+    "quote": "我怀了你家男人的孩子，你们离婚吧。",
+    "motivation": "逼迫陈萍离婚。",
+    "relationships": [
+      {
+        "target_name": "爸爸",
+        "relation_type": "情人，怀孕"
+      },
+      {
+        "target_name": "陈萍",
+        "relation_type": "离婚破坏者"
+      }
+    ]
+  },
+  {
+    "name": "李娟",
+    "aliases": [],
+    "features": "",
+    "personality": "",
+    "quote": "",
+    "relationships": [
+      {
+        "target_name": "田莉",
+        "relation_type": "丝袜供货人"
+      }
+    ]
+  },
+  {
+    "name": "王芳",
+    "aliases": [],
+    "features": "",
+    "personality": "",
+    "quote": "",
+    "relationships": [
+      {
+        "target_name": "田莉",
+        "relation_type": "丝袜供货人"
+      }
+    ]
+  },
+  {
+    "name": "沈丽",
+    "aliases": [],
+    "features": "",
+    "personality": "",
+    "quote": "",
+    "relationships": [
+      {
+        "target_name": "田莉",
+        "relation_type": "丝袜供货人"
+      }
+    ]
+  }
+]

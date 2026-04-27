@@ -8,6 +8,7 @@ import asyncio
 from pathlib import Path
 from openai import AsyncOpenAI
 from project_config import get_config
+from llm_cache import LLMCache
 
 class CardCreator:
     """使用Pro模型智能生成角色卡"""
@@ -32,6 +33,9 @@ class CardCreator:
         self.retry_delay = int(self.config.get("performance.retry_delay", 10))
         self.max_concurrent = int(self.config.get("performance.max_concurrent", 1))
         self.semaphore = asyncio.Semaphore(self.max_concurrent)
+
+        # LLM缓存
+        self.cache = LLMCache()
 
         # 初始化OpenAI客户端
         api_key = api_config.get("api_key")
@@ -103,56 +107,71 @@ class CardCreator:
             {"role": "user", "content": prompt}
         ]
 
-        async with self.semaphore:
-            for attempt in range(self.retry_limit):
-                try:
-                    response = await self.client.chat.completions.create(
-                        model=self.pro_model,
-                        messages=messages,
-                        temperature=self.generation_temperature,
-                        max_tokens=self.max_tokens,
-                        response_format={"type": "json_object"} # 请求JSON输出
-                    )
-                    
-                    llm_output = response.choices[0].message.content
-                    refined_data = json.loads(llm_output)
+        # 检查缓存
+        cached = self.cache.get(prompt)
+        if cached is not None:
+            llm_output = cached
+            print(f"[CACHE] [{idx}/{total}] 角色卡 {char_name} 命中缓存")
+            try:
+                refined_data = json.loads(llm_output)
+            except Exception:
+                cached = None  # 缓存损坏，走API
 
-                    # 构建最终的角色卡
-                    final_card = {
-                        "spec": "chara_card_v2",
-                        "spec_version": "2.0",
-                        "data": {
-                            "name": raw_data.get("name", char_name),
-                            "creator": raw_data.get("creator", "st_book"),
-                            "character_version": raw_data.get("character_version", "1.1"),
-                            "description": refined_data.get("description", ""),
-                            "personality": refined_data.get("personality", ""),
-                            "scenario": raw_data.get("scenario", ""), # 场景可以保留原始的
-                            "first_mes": refined_data.get("first_mes", ""),
-                            "mes_example": "",
-                            "creator_notes": f"由我的主人nala给你做的。原始条目数: {raw_data.get('entries', 1)}",
-                            "system_prompt": "",
-                            "post_history_instructions": "",
-                            "alternate_greetings": refined_data.get("alternate_greetings", []),
-                            "tags": refined_data.get("tags", []),
-                            "extensions": {}
-                        }
-                    }
+        if cached is None:
+            async with self.semaphore:
+                for attempt in range(self.retry_limit):
+                    try:
+                        response = await self.client.chat.completions.create(
+                            model=self.pro_model,
+                            messages=messages,
+                            temperature=self.generation_temperature,
+                            max_tokens=self.max_tokens,
+                            response_format={"type": "json_object"} # 请求JSON输出
+                        )
 
-                    # 保存角色卡
-                    card_file = self.cards_dir / f"{final_card['data']['name']}.json"
-                    with open(card_file, 'w', encoding='utf-8') as f:
-                        json.dump(final_card, f, ensure_ascii=False, indent=2)
+                        llm_output = response.choices[0].message.content
+                        refined_data = json.loads(llm_output)
 
-                    print(f"[SUCCESS] [{idx}/{total}] 已创建高质量角色卡: {card_file.name}")
-                    return # 成功后退出循环
+                        # 写入缓存
+                        self.cache.set(prompt, llm_output)
+                        break  # 成功，跳出重试循环
 
-                except Exception as e:
-                    print(f"[WARNING] [{idx}/{total}] AI处理角色 {char_name} 失败 (尝试 {attempt + 1}/{self.retry_limit}): {e}")
-                    if attempt < self.retry_limit - 1:
-                        await asyncio.sleep(self.retry_delay)
-                    else:
-                        print(f"[ERROR] [{idx}/{total}] 角色 {char_name} 在达到最大重试次数后仍然失败。")
+                    except Exception as e:
+                        print(f"[WARNING] [{idx}/{total}] AI处理角色 {char_name} 失败 (尝试 {attempt + 1}/{self.retry_limit}): {e}")
+                        if attempt < self.retry_limit - 1:
+                            await asyncio.sleep(self.retry_delay)
+                        else:
+                            print(f"[ERROR] [{idx}/{total}] 角色 {char_name} 在达到最大重试次数后仍然失败。")
+                            return
+
+        # 构建最终的角色卡
+        final_card = {
+            "spec": "chara_card_v2",
+            "spec_version": "2.0",
+            "data": {
+                "name": raw_data.get("name", char_name),
+                "creator": raw_data.get("creator", "st_book"),
+                "character_version": raw_data.get("character_version", "1.1"),
+                "description": refined_data.get("description", ""),
+                "personality": refined_data.get("personality", ""),
+                "scenario": raw_data.get("scenario", ""), # 场景可以保留原始的
+                "first_mes": refined_data.get("first_mes", ""),
+                "mes_example": "",
+                "creator_notes": f"由我的主人nala给你做的。原始条目数: {raw_data.get('entries', 1)}",
+                "system_prompt": "",
+                "post_history_instructions": "",
+                "alternate_greetings": refined_data.get("alternate_greetings", []),
+                "tags": refined_data.get("tags", []),
+                "extensions": {}
+            }
+        }
+
+        # 保存角色卡
+        card_file = self.cards_dir / f"{final_card['data']['name']}.json"
+        with open(card_file, 'w', encoding='utf-8') as f:
+            json.dump(final_card, f, ensure_ascii=False, indent=2)
+
+        print(f"[SUCCESS] [{idx}/{total}] 已创建高质量角色卡: {card_file.name}")
 
     async def create_all_cards_async(self):
         """异步创建所有角色卡"""
@@ -171,9 +190,30 @@ class CardCreator:
             
         print(f"找到 {len(role_files)} 个角色数据文件，准备进行AI增强处理。")
 
+        # 跳过已存在的角色卡
+        pending_files = []
+        for role_file in role_files:
+            try:
+                with open(role_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                char_name = data.get("name", role_file.stem)
+                card_path = self.cards_dir / f"{char_name}.json"
+                if card_path.exists():
+                    print(f"[SKIP] 角色卡已存在: {char_name}")
+                else:
+                    pending_files.append(role_file)
+            except Exception:
+                pending_files.append(role_file)
+
+        if not pending_files:
+            print("所有角色卡已存在，无需重新生成。")
+            return
+
+        print(f"需要生成 {len(pending_files)} 个角色卡（跳过 {len(role_files) - len(pending_files)} 个已存在）")
+
         tasks = [
-            self.generate_card_with_llm(role_file, idx + 1, len(role_files))
-            for idx, role_file in enumerate(role_files)
+            self.generate_card_with_llm(role_file, idx + 1, len(pending_files))
+            for idx, role_file in enumerate(pending_files)
         ]
         await asyncio.gather(*tasks)
 

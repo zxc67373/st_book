@@ -11,6 +11,7 @@ from collections import defaultdict
 from typing import Dict, List, Any, Optional
 from openai import AsyncOpenAI
 from project_config import get_config
+from llm_cache import LLMCache
 
 class WorldbookGenerator:
     """使用Pro模型将分类条目总结生成最终世界书"""
@@ -37,6 +38,9 @@ class WorldbookGenerator:
         self.max_concurrent = int(self.config.get("performance.max_concurrent", 1))
         self.semaphore = asyncio.Semaphore(self.max_concurrent)
 
+        # LLM缓存
+        self.cache = LLMCache()
+
         # 初始化OpenAI客户端
         api_key = api_config.get("api_key")
         if not api_key:
@@ -47,6 +51,56 @@ class WorldbookGenerator:
             base_url=api_config.get("api_base"),
             timeout=self.timeout
         )
+
+        # 世界书生成Prompt模板
+        self.worldbook_prompt_template = self.config.get("worldbook.generation_prompt", """
+<role>
+你是一位顶级世界观架构师，师从于布兰登·桑德森和乔治·R·R·马丁。你不仅仅是编辑，更是体系的创建者。你的工作是将一堆零散、原始的设定（fragments），升华为一个逻辑自洽、细节丰富、充满内在联系的宏大世界。
+</role>
+
+<task>
+你的核心任务是，为当前聚焦的 **"{category}"** 类别撰写一份深度介绍章节。你必须将下方提供的原始设定条目，通过"世界观构建黄金三角"方法论进行重构、扩展和升华。
+
+**【第一步：全局认知 (Global Context Awareness)】**
+在动笔前，请先默读并理解整个世界的核心构成。这能帮助你建立条目间的联系。
+
+<world_overview>
+{all_categories_summary}
+</world_overview>
+
+**【第二步：原始设定碎片 (Raw Fragments)】**
+这是你本次需要处理的，关于 **"{category}"** 的原始条目：
+
+<raw_entries>
+{entries_text}
+</raw_entries>
+
+**【第三步：世界观构建黄金三角方法论 (The Golden Triangle Methodology)】**
+你必须遵循以下思考和写作流程，来构建你的章节：
+
+1.  **要素内在整合 (Intra-Element Integration):**
+    - **去重与合并：** 找出`raw_entries`中本质相同或高度相似的条目，将它们合并。
+    - **分类与分层：** 在`{category}`内部进行二次分类。例如，如果类别是"组织"，你可以细分为"国家势力"、"秘密社团"、"商业行会"等子标题。这能立刻建立起结构感。
+    - **核心要素提炼：** 识别出此类别的"明星要素"（最重要的1-3个条目），并在描述时给予更多笔墨。
+
+2.  **要素间关联构建 (Inter-Element Relation Building):**
+    - **建立联系：** 这是最关键的一步！你必须主动思考并回答：当前`{category}`中的条目，与`world_overview`中**其他类别**的条目有什么关系？
+        - *示例1 (处理"地点"类别时):* 这个"低语森林"是否是某个"组织"的根据地？它是否与某个"历史事件"有关？森林里的特殊植物是否是某个"角色"制作魔药的材料？
+        - *示例2 (处理"角色"类别时):* 这个角色"阿尔弗雷德"属于哪个"组织"？他的行动是否会影响某个"地点"？他是否是某个"历史事件"的亲历者？
+    - **在描述中体现关联：** 将你思考出的这些关联，自然地写入描述文字中。这会让世界"活"起来。
+
+3.  **影响与意义升华 (Impact & Significance Elevation):**
+    - **功能与作用：** 描述每个要素在世界中的具体功能或作用。它解决了什么问题？或者制造了什么麻烦？
+    - **文化与象征意义：** 思考并赋予要素更深层次的意义。这个地点是否是某个种族的圣地？这个组织是否有独特的文化符号和仪式？
+    - **动态影响：** 描述这个要素对世界正在产生或将要产生什么影响。它是否是当前世界冲突的焦点？
+
+**【第四步：输出要求 (Output Requirements)】**
+- **格式：** 严格使用Markdown，包含多级标题 (`##`, `###`)、列表 (`*` 或 `1.`) 和粗体 (`**text**`)。
+- **文笔：** 保持专业、客观的百科式叙述风格，同时兼具文学性和可读性。
+- **内容：** 你的输出应该是直接的、最终的Markdown章节内容。严禁包含任何"好的，这是为您生成的章节"之类的对话、解释或元评论。
+- **专注：** 本次任务只输出关于 **"{category}"** 的章节内容。
+</task>
+""")
 
     def _clean_ai_preamble(self, content: str) -> str:
         """清理AI生成内容中的开场白和元评论"""
@@ -173,6 +227,14 @@ class WorldbookGenerator:
 """
 
             # 添加重试机制
+            # 检查缓存
+            cached = self.cache.get(rules_prompt)
+            if cached is not None:
+                cleaned_content = self._clean_ai_preamble(cached.strip())
+                rule_summaries[rule_type] = cleaned_content
+                print(f"[CACHE] 规则类型 {rule_type} 命中缓存")
+                continue
+
             for attempt in range(self.retry_limit):
                 try:
                     messages = [
@@ -191,6 +253,9 @@ class WorldbookGenerator:
                     content = response.choices[0].message.content
                     if not content or content.strip() == "":
                         raise ValueError("API返回空内容")
+
+                    # 写入缓存
+                    self.cache.set(rules_prompt, content)
 
                     # 清理AI开场白
                     cleaned_content = self._clean_ai_preamble(content.strip())
@@ -260,6 +325,13 @@ class WorldbookGenerator:
 """
 
         # 添加重试机制
+        # 检查缓存
+        cached = self.cache.get(timeline_prompt)
+        if cached is not None:
+            cleaned_content = self._clean_ai_preamble(cached.strip())
+            print("[CACHE] 时间线总览命中缓存")
+            return cleaned_content
+
         for attempt in range(self.retry_limit):
             try:
                 messages = [
@@ -278,6 +350,9 @@ class WorldbookGenerator:
                 content = response.choices[0].message.content
                 if not content or content.strip() == "":
                     raise ValueError("API返回空内容")
+
+                # 写入缓存
+                self.cache.set(timeline_prompt, content)
 
                 # 清理AI开场白
                 cleaned_content = self._clean_ai_preamble(content.strip())
@@ -347,6 +422,14 @@ class WorldbookGenerator:
 """
 
             # 添加重试机制
+            # 检查缓存
+            cached = self.cache.get(entity_prompt)
+            if cached is not None:
+                cleaned_content = self._clean_ai_preamble(cached.strip())
+                entity_summaries[entity_name] = cleaned_content
+                print(f"[CACHE] 实体 {entity_name} 命中缓存")
+                continue
+
             for attempt in range(self.retry_limit):
                 try:
                     messages = [
@@ -365,6 +448,9 @@ class WorldbookGenerator:
                     content = response.choices[0].message.content
                     if not content or content.strip() == "":
                         raise ValueError("API返回空内容")
+
+                    # 写入缓存
+                    self.cache.set(entity_prompt, content)
 
                     # 清理AI开场白
                     cleaned_content = self._clean_ai_preamble(content.strip())
@@ -391,56 +477,6 @@ class WorldbookGenerator:
                         entity_summaries[entity_name] = f"## {entity_name}\n\n*总结生成失败*\n\n**基础信息：**\n- 参与事件：{entity_data.get('event_count', 0)}个\n- 平均重要性：{entity_data.get('average_significance', 0):.1f}\n- 活动地点：{', '.join(entity_data.get('locations', [])[:3])}"
 
         return entity_summaries
-
-        # [核心优化] 将Prompt作为可配置的类属性，结构更清晰
-        self.worldbook_prompt_template = self.config.get("worldbook.generation_prompt", """
-<role>
-你是一位顶级世界观架构师，师从于布兰登·桑德森和乔治·R·R·马丁。你不仅仅是编辑，更是体系的创建者。你的工作是将一堆零散、原始的设定（fragments），升华为一个逻辑自洽、细节丰富、充满内在联系的宏大世界。
-</role>
-
-<task>
-你的核心任务是，为当前聚焦的 **“{category}”** 类别撰写一份深度介绍章节。你必须将下方提供的原始设定条目，通过“世界观构建黄金三角”方法论进行重构、扩展和升华。
-
-**【第一步：全局认知 (Global Context Awareness)】**
-在动笔前，请先默读并理解整个世界的核心构成。这能帮助你建立条目间的联系。
-
-<world_overview>
-{all_categories_summary}
-</world_overview>
-
-**【第二步：原始设定碎片 (Raw Fragments)】**
-这是你本次需要处理的，关于 **“{category}”** 的原始条目：
-
-<raw_entries>
-{entries_text}
-</raw_entries>
-
-**【第三步：世界观构建黄金三角方法论 (The Golden Triangle Methodology)】**
-你必须遵循以下思考和写作流程，来构建你的章节：
-
-1.  **要素内在整合 (Intra-Element Integration):**
-    - **去重与合并：** 找出`raw_entries`中本质相同或高度相似的条目，将它们合并。
-    - **分类与分层：** 在`{category}`内部进行二次分类。例如，如果类别是“组织”，你可以细分为“国家势力”、“秘密社团”、“商业行会”等子标题。这能立刻建立起结构感。
-    - **核心要素提炼：** 识别出此类别的“明星要素”（最重要的1-3个条目），并在描述时给予更多笔墨。
-
-2.  **要素间关联构建 (Inter-Element Relation Building):**
-    - **建立联系：** 这是最关键的一步！你必须主动思考并回答：当前`{category}`中的条目，与`world_overview`中**其他类别**的条目有什么关系？
-        - *示例1 (处理“地点”类别时):* 这个“低语森林”是否是某个“组织”的根据地？它是否与某个“历史事件”有关？森林里的特殊植物是否是某个“角色”制作魔药的材料？
-        - *示例2 (处理“角色”类别时):* 这个角色“阿尔弗雷德”属于哪个“组织”？他的行动是否会影响某个“地点”？他是否是某个“历史事件”的亲历者？
-    - **在描述中体现关联：** 将你思考出的这些关联，自然地写入描述文字中。这会让世界“活”起来。
-
-3.  **影响与意义升华 (Impact & Significance Elevation):**
-    - **功能与作用：** 描述每个要素在世界中的具体功能或作用。它解决了什么问题？或者制造了什么麻烦？
-    - **文化与象征意义：** 思考并赋予要素更深层次的意义。这个地点是否是某个种族的圣地？这个组织是否有独特的文化符号和仪式？
-    - **动态影响：** 描述这个要素对世界正在产生或将要产生什么影响。它是否是当前世界冲突的焦点？
-
-**【第四步：输出要求 (Output Requirements)】**
-- **格式：** 严格使用Markdown，包含多级标题 (`##`, `###`)、列表 (`*` 或 `1.`) 和粗体 (`**text**`)。
-- **文笔：** 保持专业、客观的百科式叙述风格，同时兼具文学性和可读性。
-- **内容：** 你的输出应该是直接的、最终的Markdown章节内容。严禁包含任何“好的，这是为您生成的章节”之类的对话、解释或元评论。
-- **专注：** 本次任务只输出关于 **“{category}”** 的章节内容。
-</task>
-""")
 
     def get_generation_prompt(self, category: str, entries: list, all_categories_summary: str) -> str:
         """获取用于生成最终世界书章节的提示词"""
@@ -582,6 +618,12 @@ class WorldbookGenerator:
         ]
 
         async with self.semaphore:
+            # 检查缓存
+            cached = self.cache.get(prompt)
+            if cached is not None:
+                print(f"[CACHE] [命中] 类别 **{category}** 缓存命中")
+                return category, cached.strip()
+
             for attempt in range(self.retry_limit):
                 try:
                     response = await self.client.chat.completions.create(
@@ -592,6 +634,9 @@ class WorldbookGenerator:
                         timeout=self.timeout
                     )
                     content = response.choices[0].message.content
+
+                    # 写入缓存
+                    self.cache.set(prompt, content)
                     print(f"✅ [成功] 已生成类别内容: **{category}**")
                     return category, content.strip()
                 except Exception as e:
@@ -901,6 +946,14 @@ class WorldbookGenerator:
                     {"role": "user", "content": rules_prompt}
                 ]
 
+                # 检查缓存
+                cached = self.cache.get(rules_prompt)
+                if cached is not None:
+                    cleaned_content = self._clean_ai_preamble(cached.strip())
+                    rule_summaries[rule_type] = cleaned_content
+                    print(f"[CACHE] 规则类型 {rule_type} 命中缓存")
+                    continue
+
                 # 添加重试机制
                 for attempt in range(self.retry_limit):
                     try:
@@ -915,6 +968,9 @@ class WorldbookGenerator:
                         content = response.choices[0].message.content
                         if not content or content.strip() == "":
                             raise ValueError("API返回空内容")
+
+                        # 写入缓存
+                        self.cache.set(rules_prompt, content)
 
                         # 清理AI开场白
                         cleaned_content = self._clean_ai_preamble(content.strip())
@@ -1181,6 +1237,13 @@ class WorldbookGenerator:
             {"role": "user", "content": timeline_prompt}
         ]
 
+        # 检查缓存
+        cached = self.cache.get(timeline_prompt)
+        if cached is not None:
+            cleaned_content = self._clean_ai_preamble(cached.strip())
+            print("[CACHE] 时间线总览命中缓存")
+            return cleaned_content
+
         # 添加重试机制
         for attempt in range(self.retry_limit):
             try:
@@ -1195,6 +1258,9 @@ class WorldbookGenerator:
                 content = response.choices[0].message.content
                 if not content or content.strip() == "":
                     raise ValueError("API返回空内容")
+
+                # 写入缓存
+                self.cache.set(timeline_prompt, content)
 
                 # 清理AI开场白
                 cleaned_content = self._clean_ai_preamble(content.strip())
@@ -1311,6 +1377,14 @@ class WorldbookGenerator:
                     {"role": "user", "content": entity_prompt}
                 ]
 
+                # 检查缓存
+                cached = self.cache.get(entity_prompt)
+                if cached is not None:
+                    cleaned_content = self._clean_ai_preamble(cached.strip())
+                    entity_summaries[entity_name] = cleaned_content
+                    print(f"[CACHE] 实体 {entity_name} 命中缓存")
+                    continue
+
                 # 添加重试机制
                 for attempt in range(self.retry_limit):
                     try:
@@ -1325,6 +1399,9 @@ class WorldbookGenerator:
                         content = response.choices[0].message.content
                         if not content or content.strip() == "":
                             raise ValueError("API返回空内容")
+
+                        # 写入缓存
+                        self.cache.set(entity_prompt, content)
 
                         # 清理AI开场白
                         cleaned_content = self._clean_ai_preamble(content.strip())

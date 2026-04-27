@@ -1,0 +1,63 @@
+{
+  "classification_summary": {
+    "rules": {
+      "total_count": 8,
+      "types_count": 4,
+      "types": {
+        "种族设定": 1,
+        "社会规则": 4,
+        "经济体系": 2,
+        "物理法则": 1
+      }
+    },
+    "events": {
+      "total_count": 6,
+      "types_count": 4,
+      "types": {
+        "情感转折": 3,
+        "关系建立": 1,
+        "危机解决": 1,
+        "势力变动": 1
+      }
+    },
+    "entities": {
+      "total_count": 7,
+      "top_entities": [
+        [
+          "妈妈（陈萍）",
+          6
+        ],
+        [
+          "男孩（小文）",
+          5
+        ],
+        [
+          "田莉",
+          3
+        ],
+        [
+          "爸爸",
+          1
+        ],
+        [
+          "出轨女人",
+          1
+        ],
+        [
+          "年轻男人",
+          1
+        ],
+        [
+          "网友们",
+          1
+        ]
+      ]
+    }
+  },
+  "layer_distribution": {
+    "rules_layer": 8,
+    "events_layer": 6,
+    "entity_layer": 7,
+    "timeline_layer": 1
+  }
+}

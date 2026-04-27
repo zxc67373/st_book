@@ -10,6 +10,7 @@ from typing import Dict, List
 import time
 
 import shutil
+from project_config import get_config
 
 def show_help():
     """显示帮助信息"""
@@ -17,7 +18,8 @@ def show_help():
 角色工作流管理器 - 使用说明
 
 **角色卡制作**
-  python character_workflow.py auto        - [推荐] 一键全自动制卡 (清理并完整运行)
+  python character_workflow.py auto        - [推荐] 一键全自动制卡 (增量模式，跳过已完成步骤)
+  python character_workflow.py auto-clean  - 一键全自动制卡 (清理后全量运行)
   python character_workflow.py full        - 执行完整流程 (不清理)
   python character_workflow.py split       - 分割小说文本为文本块
   python character_workflow.py extract     - 从文本块提取角色信息
@@ -72,7 +74,8 @@ def show_status():
     # 检查工作流完成度
     print(f"\n工作流完成度:")
 
-    novel_exist = Path("a.txt").exists()
+    source_file = get_config().get('input.source_file', 'a.txt')
+    novel_exist = Path(source_file).exists()
     chunks_exist = Path("chunks").exists() and list(Path("chunks").glob("chunk_*.txt"))
     extracted_exist = Path("character_responses").exists() and list(Path("character_responses").glob("*.json"))
     merged_exist = Path("roles_json").exists() and list(Path("roles_json").glob("*.json"))
@@ -93,7 +96,7 @@ def show_status():
     # 推荐下一步操作
     print(f"\n推荐操作:")
     if not novel_exist:
-        print("  需要先准备小说文件 a.txt")
+        print(f"  需要先准备小说文件 {source_file}")
     elif not chunks_exist:
         print("  运行: python character_workflow.py split")
     elif not extracted_exist:
@@ -111,11 +114,11 @@ def split_text():
     try:
         from text_splitter import TextSplitter
 
-        # 检查输入文件
-        input_file = "a.txt"
+        # 从配置读取输入文件
+        input_file = get_config().get('input.source_file', 'a.txt')
         if not Path(input_file).exists():
             print(f"错误: 找不到输入文件 {input_file}")
-            print("请将小说文件命名为 a.txt 并放在当前目录")
+            print("请在 config.yaml 中设置 input.source_file")
             return False
 
         splitter = TextSplitter()
@@ -442,17 +445,85 @@ def show_wb_final_stats():
     if Path("worldbook").exists():
         print(f"  输出位置: worldbook/ 目录")
 
+def _has_chunks():
+    """检查文本分块是否已完成"""
+    chunks_dir = Path("chunks")
+    return chunks_dir.exists() and list(chunks_dir.glob("chunk_*.txt"))
+
+def _has_extracted():
+    """检查角色提取是否已完成"""
+    resp_dir = Path("character_responses")
+    return resp_dir.exists() and list(resp_dir.glob("*.json"))
+
+def _has_merged():
+    """检查角色合并是否已完成"""
+    roles_dir = Path("roles_json")
+    return roles_dir.exists() and list(roles_dir.glob("*.json"))
+
+def _has_cards():
+    """检查角色卡是否已生成"""
+    cards_dir = Path("cards")
+    return cards_dir.exists() and list(cards_dir.glob("*.json"))
+
 def run_auto_workflow():
-    """运行一键全自动工作流"""
+    """运行一键全自动工作流（增量模式，跳过已完成的步骤）"""
     print("="*60)
     print("开始执行一键全自动制卡流程")
     print("="*60)
 
-    # 步骤0: 清理
+    # 步骤0: 分割文本
+    if _has_chunks():
+        print("\n步骤0: 文本分块已存在，跳过")
+    else:
+        print("\n步骤0: 分割小说文本")
+        if not split_text():
+            print("工作流中断：文本分割失败")
+            return
+
+    # 步骤1: 提取角色
+    if _has_extracted():
+        print("\n步骤1: 角色提取已存在，跳过")
+    else:
+        print("\n步骤1: 从文本块提取角色信息")
+        if not extract_characters():
+            print("工作流中断：角色提取失败")
+            return
+
+    # 步骤2: 合并角色
+    if _has_merged():
+        print("\n步骤2: 角色合并已存在，跳过")
+    else:
+        print("\n步骤2: 合并重复角色数据")
+        if not merge_characters():
+            print("工作流中断：角色合并失败")
+            return
+
+    # 步骤3: 筛选角色
+    print("\n步骤3: 筛选角色")
+    if not filter_characters():
+        print("工作流中断：角色筛选失败")
+        return
+
+    # 步骤4: 创建角色卡
+    print("\n步骤4: 生成角色卡")
+    if not create_character_cards():
+        print("工作流中断：角色卡创建失败")
+        return
+
+    print("\n"+"="*60)
+    print("一键全自动制卡流程执行成功！")
+    print("="*60)
+    show_final_stats()
+
+def run_auto_clean_workflow():
+    """运行一键全自动工作流（清理后全量运行）"""
+    print("="*60)
+    print("开始执行一键全自动制卡流程（清理模式）")
+    print("="*60)
+
     print("\n步骤0: 清理旧文件和目录")
     clean_all()
 
-    # 运行完整工作流
     run_full_workflow()
 
 def clean_all():
@@ -566,8 +637,12 @@ def main():
     command = sys.argv[1].lower()
 
     if command == "auto":
-        # 一键全自动
+        # 一键全自动（增量模式）
         run_auto_workflow()
+
+    elif command == "auto-clean":
+        # 一键全自动（清理后全量运行）
+        run_auto_clean_workflow()
 
     elif command == "split":
         # 分割文本

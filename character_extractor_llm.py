@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from openai import AsyncOpenAI
 from project_config import get_config
+from llm_cache import LLMCache
 
 class LLMCharacterExtractor:
     """使用LLM的智能角色提取器"""
@@ -56,6 +57,9 @@ class LLMCharacterExtractor:
         
         # 并发控制
         self.semaphore = asyncio.Semaphore(self.max_concurrent)
+
+        # LLM缓存
+        self.cache = LLMCache()
         
         # 统计信息
         self.stats = {
@@ -138,101 +142,124 @@ class LLMCharacterExtractor:
                 chunk_name, chunk_text, response_path, raw_path, bad_path, idx, total
             )
     
-    async def _process_with_retry(self, chunk_name: str, chunk_text: str, 
+    async def _process_with_retry(self, chunk_name: str, chunk_text: str,
                                 response_path: Path, raw_path: Path, bad_path: Path,
                                 idx: int, total: int) -> Tuple[str, bool, int]:
         """带重试的处理逻辑"""
         prompt = self.get_character_analysis_prompt()
-        
+
         messages = [
             {"role": "system", "content": "你是一位专业的小说角色分析AI助手。"},
             {"role": "user", "content": prompt + chunk_text}
         ]
-        
-        raw_output = None
-        for attempt in range(1, self.retry_limit + 1):
-            try:
-                print(f"[PROCESS] [{idx}/{total}] 处理 {chunk_name}（第 {attempt} 次）")
-                
-                # API调用前等待，避免限流
-                if attempt > 1:
-                    await asyncio.sleep(self.rate_limit_delay)
 
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=self.extraction_temperature,
-                    max_tokens=self.max_tokens
-                )
-                
-                raw_output = getattr(response.choices[0].message, "content", None)
-                if raw_output is None:
-                    raise ValueError("API 回傳空內容")
-                
-                # 保存原始输出
-                with open(raw_path, 'w', encoding='utf-8') as f:
-                    f.write(raw_output)
-                
-                # 尝试解析JSON
-                # 清理可能的markdown格式
-                cleaned_output = raw_output.strip()
-                if cleaned_output.startswith('```json'):
-                    cleaned_output = cleaned_output[7:]
-                if cleaned_output.endswith('```'):
-                    cleaned_output = cleaned_output[:-3]
-                cleaned_output = cleaned_output.strip()
-                
-                parsed_data = json.loads(cleaned_output)
-                
-                # 验证数据格式
-                if not isinstance(parsed_data, list):
-                    raise ValueError("输出不是JSON数组格式")
-                
-                # 过滤和验证角色数据
-                valid_characters = []
-                for char in parsed_data:
-                    if isinstance(char, dict):
-                        # 支持中文和英文字段名
-                        name = None
-                        if '名字' in char:
-                            name = char['名字'].strip()
-                        elif 'name' in char:
-                            name = char['name'].strip()
+        # 检查缓存
+        cache_key = prompt + chunk_text
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            raw_output = cached
+            print(f"[CACHE] [{idx}/{total}] {chunk_name} 命中缓存")
+        else:
+            raw_output = None
 
-                        if name and len(name) >= 2 and self._is_valid_character_name(name):
-                            # 标准化字段名为中文（保持向后兼容）
-                            standardized_char = self._standardize_character_fields(char)
-                            valid_characters.append(standardized_char)
-                
-                # 保存处理后的数据
-                with open(response_path, 'w', encoding='utf-8') as f:
-                    json.dump(valid_characters, f, ensure_ascii=False, indent=2)
-                
-                char_count = len(valid_characters)
-                print(f"[SUCCESS] [{idx}/{total}] {chunk_name} 处理成功，提取 {char_count} 个角色")
-                return chunk_name, True, char_count
-                
-            except json.JSONDecodeError as e:
-                with open(bad_path, 'w', encoding='utf-8') as f:
-                    f.write(f"JSON解析错误: {e}\n\n原始输出:\n{raw_output or '[空回應]'}")
-                print(f"[ERROR] [{idx}/{total}] JSON 格式錯誤：{chunk_name}")
+        # 如果没有缓存，调用API
+        if raw_output is None:
+            for attempt in range(1, self.retry_limit + 1):
+                try:
+                    print(f"[PROCESS] [{idx}/{total}] 处理 {chunk_name}（第 {attempt} 次）")
+
+                    # API调用前等待，避免限流
+                    if attempt > 1:
+                        await asyncio.sleep(self.rate_limit_delay)
+
+                    response = await self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=self.extraction_temperature,
+                        max_tokens=self.max_tokens
+                    )
+
+                    raw_output = getattr(response.choices[0].message, "content", None)
+                    if raw_output is None:
+                        raise ValueError("API 回傳空內容")
+
+                    # 写入缓存
+                    self.cache.set(cache_key, raw_output)
+
+                    # 保存原始输出
+                    with open(raw_path, 'w', encoding='utf-8') as f:
+                        f.write(raw_output)
+
+                    break  # 成功，跳出重试循环
+
+                except json.JSONDecodeError as e:
+                    with open(bad_path, 'w', encoding='utf-8') as f:
+                        f.write(f"JSON解析错误: {e}\n\n原始输出:\n{raw_output or '[空回應]'}")
+                    print(f"[ERROR] [{idx}/{total}] JSON 格式錯誤：{chunk_name}")
+                    return chunk_name, False, 0
+
+                except Exception as e:
+                    err_info = str(e)
+                    print(f"[WARNING] [{idx}/{total}] {chunk_name} 錯誤（第 {attempt} 次）：{err_info}")
+
+                    with open(bad_path, 'w', encoding='utf-8') as f:
+                        f.write(f"处理错误: {err_info}\n\n原始输出:\n{raw_output or '[空回應]'}")
+
+                    if "rate limit" in err_info.lower() or "429" in err_info:
+                        print(f"[WAIT] API 限流，等待 {self.retry_delay * attempt} 秒")
+                        await asyncio.sleep(self.retry_delay * attempt)
+                    elif attempt < self.retry_limit:
+                        await asyncio.sleep(self.retry_delay)
+
+            if raw_output is None:
+                print(f"[FAILED] [{idx}/{total}] 放棄 {chunk_name}，已達最大重試次數")
                 return chunk_name, False, 0
-                
-            except Exception as e:
-                err_info = str(e)
-                print(f"[WARNING] [{idx}/{total}] {chunk_name} 錯誤（第 {attempt} 次）：{err_info}")
-                
-                with open(bad_path, 'w', encoding='utf-8') as f:
-                    f.write(f"处理错误: {err_info}\n\n原始输出:\n{raw_output or '[空回應]'}")
-                
-                if "rate limit" in err_info.lower() or "429" in err_info:
-                    print(f"[WAIT] API 限流，等待 {self.retry_delay * attempt} 秒")
-                    await asyncio.sleep(self.retry_delay * attempt)
-                elif attempt < self.retry_limit:
-                    await asyncio.sleep(self.retry_delay)
-        
-        print(f"[FAILED] [{idx}/{total}] 放棄 {chunk_name}，已達最大重試次數")
-        return chunk_name, False, 0
+
+        # 解析和验证（缓存命中和API调用共用）
+        try:
+            # 保存原始输出（缓存命中时也需要保存）
+            with open(raw_path, 'w', encoding='utf-8') as f:
+                f.write(raw_output)
+
+            cleaned_output = raw_output.strip()
+            if cleaned_output.startswith('```json'):
+                cleaned_output = cleaned_output[7:]
+            if cleaned_output.endswith('```'):
+                cleaned_output = cleaned_output[:-3]
+            cleaned_output = cleaned_output.strip()
+
+            parsed_data = json.loads(cleaned_output)
+
+            if not isinstance(parsed_data, list):
+                raise ValueError("输出不是JSON数组格式")
+
+            # 过滤和验证角色数据
+            valid_characters = []
+            for char in parsed_data:
+                if isinstance(char, dict):
+                    name = None
+                    if '名字' in char:
+                        name = char['名字'].strip()
+                    elif 'name' in char:
+                        name = char['name'].strip()
+
+                    if name and len(name) >= 2 and self._is_valid_character_name(name):
+                        standardized_char = self._standardize_character_fields(char)
+                        valid_characters.append(standardized_char)
+
+            # 保存处理后的数据
+            with open(response_path, 'w', encoding='utf-8') as f:
+                json.dump(valid_characters, f, ensure_ascii=False, indent=2)
+
+            char_count = len(valid_characters)
+            print(f"[SUCCESS] [{idx}/{total}] {chunk_name} 处理成功，提取 {char_count} 个角色")
+            return chunk_name, True, char_count
+
+        except json.JSONDecodeError as e:
+            with open(bad_path, 'w', encoding='utf-8') as f:
+                f.write(f"JSON解析错误: {e}\n\n原始输出:\n{raw_output or '[空回應]'}")
+            print(f"[ERROR] [{idx}/{total}] JSON 格式錯誤：{chunk_name}")
+            return chunk_name, False, 0
     
     def _is_valid_character_name(self, name: str) -> bool:
         """验证是否为有效的角色名称"""

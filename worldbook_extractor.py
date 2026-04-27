@@ -8,6 +8,7 @@ import asyncio
 from pathlib import Path
 from openai import AsyncOpenAI
 from project_config import get_config
+from llm_cache import LLMCache
 
 class WorldbookExtractor:
     """使用基础模型提取和分类世界书条目"""
@@ -38,6 +39,9 @@ class WorldbookExtractor:
         self.retry_delay = int(self.config.get("performance.retry_delay", 10))
         self.rate_limit_delay = int(self.config.get("performance.rate_limit_delay", 5))
         self.semaphore = asyncio.Semaphore(self.max_concurrent)
+
+        # LLM缓存
+        self.cache = LLMCache()
 
         # 初始化OpenAI客户端
         api_key = api_config.get("api_key")
@@ -281,21 +285,30 @@ class WorldbookExtractor:
             await asyncio.gather(*tasks)
             print(f"[COMPLETE] [{idx}/{total}] {chunk_name} 所有提取任务完成")
 
-    async def _extract_events(self, chunk_text: str, chunk_metadata: dict, output_file: Path,
-                             chunk_name: str, idx: int, total: int) -> None:
-        """提取事件数据（带重试机制）"""
-        prompt = self.get_extraction_prompt(chunk_metadata) + chunk_text
+    async def _extract_with_llm(self, chunk_text: str, chunk_metadata: dict, output_file: Path,
+                                chunk_name: str, idx: int, total: int,
+                                prompt_fn, system_msg: str, label: str) -> None:
+        """通用LLM提取方法（带重试机制和缓存）"""
+        prompt = prompt_fn(chunk_metadata) + chunk_text
         messages = [
-            {"role": "system", "content": "你是一个专业的故事分析师。"},
+            {"role": "system", "content": system_msg},
             {"role": "user", "content": prompt}
         ]
+
+        # 检查缓存
+        cached = self.cache.get(prompt)
+        if cached is not None:
+            cleaned_json = self._extract_json_from_response(cached.strip())
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(cleaned_json)
+            print(f"[CACHE] [{idx}/{total}] {chunk_name} {label}命中缓存")
+            return
 
         async with self.semaphore:
             for attempt in range(1, self.retry_limit + 1):
                 try:
-                    print(f"[PROCESS] [{idx}/{total}] {chunk_name} 事件提取（第 {attempt} 次）")
+                    print(f"[PROCESS] [{idx}/{total}] {chunk_name} {label}（第 {attempt} 次）")
 
-                    # API调用前等待，避免限流
                     if attempt > 1:
                         await asyncio.sleep(self.rate_limit_delay)
 
@@ -310,86 +323,50 @@ class WorldbookExtractor:
                     if not response_text:
                         raise ValueError("API 返回空内容")
 
-                    # 清理响应文本，提取纯JSON
+                    self.cache.set(prompt, response_text)
+
                     cleaned_json = self._extract_json_from_response(response_text.strip())
 
                     with open(output_file, 'w', encoding='utf-8') as f:
                         f.write(cleaned_json)
 
-                    print(f"[SUCCESS] [{idx}/{total}] {chunk_name} 事件提取完成")
-                    return  # 成功后退出
+                    print(f"[SUCCESS] [{idx}/{total}] {chunk_name} {label}完成")
+                    return
 
                 except Exception as e:
                     err_info = str(e)
-                    print(f"[WARNING] [{idx}/{total}] {chunk_name} 事件提取失败（第 {attempt} 次）：{err_info}")
+                    print(f"[WARNING] [{idx}/{total}] {chunk_name} {label}失败（第 {attempt} 次）：{err_info}")
 
-                    # 处理限流错误
                     if "rate limit" in err_info.lower() or "429" in err_info:
                         print(f"[WAIT] API 限流，等待 {self.retry_delay * attempt} 秒")
                         await asyncio.sleep(self.retry_delay * attempt)
                     elif attempt < self.retry_limit:
                         await asyncio.sleep(self.retry_delay)
                     else:
-                        print(f"[ERROR] [{idx}/{total}] {chunk_name} 事件提取在达到最大重试次数后仍然失败")
-                        # 创建空的JSON文件作为fallback
+                        print(f"[ERROR] [{idx}/{total}] {chunk_name} {label}在达到最大重试次数后仍然失败")
                         with open(output_file, 'w', encoding='utf-8') as f:
                             f.write('[]')
                         break
+
+    async def _extract_events(self, chunk_text: str, chunk_metadata: dict, output_file: Path,
+                             chunk_name: str, idx: int, total: int) -> None:
+        """提取事件数据"""
+        await self._extract_with_llm(
+            chunk_text, chunk_metadata, output_file, chunk_name, idx, total,
+            prompt_fn=self.get_extraction_prompt,
+            system_msg="你是一个专业的故事分析师。",
+            label="事件提取"
+        )
 
     async def _extract_rules(self, chunk_text: str, chunk_metadata: dict, output_file: Path,
                             chunk_name: str, idx: int, total: int) -> None:
-        """提取规则数据（带重试机制）"""
-        prompt = self.get_rules_extraction_prompt(chunk_metadata) + chunk_text
-        messages = [
-            {"role": "system", "content": "你是一个世界观架构师。"},
-            {"role": "user", "content": prompt}
-        ]
-
-        async with self.semaphore:
-            for attempt in range(1, self.retry_limit + 1):
-                try:
-                    print(f"[PROCESS] [{idx}/{total}] {chunk_name} 规则提取（第 {attempt} 次）")
-
-                    # API调用前等待，避免限流
-                    if attempt > 1:
-                        await asyncio.sleep(self.rate_limit_delay)
-
-                    response = await self.client.chat.completions.create(
-                        model=self.model,
-                        messages=messages,
-                        temperature=self.worldbook_temperature,
-                        max_tokens=self.max_tokens
-                    )
-
-                    response_text = response.choices[0].message.content
-                    if not response_text:
-                        raise ValueError("API 返回空内容")
-
-                    # 清理响应文本，提取纯JSON
-                    cleaned_json = self._extract_json_from_response(response_text.strip())
-
-                    with open(output_file, 'w', encoding='utf-8') as f:
-                        f.write(cleaned_json)
-
-                    print(f"[SUCCESS] [{idx}/{total}] {chunk_name} 规则提取完成")
-                    return  # 成功后退出
-
-                except Exception as e:
-                    err_info = str(e)
-                    print(f"[WARNING] [{idx}/{total}] {chunk_name} 规则提取失败（第 {attempt} 次）：{err_info}")
-
-                    # 处理限流错误
-                    if "rate limit" in err_info.lower() or "429" in err_info:
-                        print(f"[WAIT] API 限流，等待 {self.retry_delay * attempt} 秒")
-                        await asyncio.sleep(self.retry_delay * attempt)
-                    elif attempt < self.retry_limit:
-                        await asyncio.sleep(self.retry_delay)
-                    else:
-                        print(f"[ERROR] [{idx}/{total}] {chunk_name} 规则提取在达到最大重试次数后仍然失败")
-                        # 创建空的JSON文件作为fallback
-                        with open(output_file, 'w', encoding='utf-8') as f:
-                            f.write('[]')
-                        break
+        """提取规则数据"""
+        await self._extract_with_llm(
+            chunk_text, chunk_metadata, output_file, chunk_name, idx, total,
+            prompt_fn=self.get_rules_extraction_prompt,
+            system_msg="你是一个世界观架构师。",
+            label="规则提取"
+        )
 
     def _extract_json_from_response(self, response_text: str) -> str:
         """从LLM响应中提取纯JSON内容"""

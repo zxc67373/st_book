@@ -1,0 +1,449 @@
+# --- API 与模型统一配置 ---
+api:
+  api_key: "sk-mbp15dNQxx0S29Bm8HgDj2mnRCyxTzVglRy1dUOnAhdnaqY5"
+  api_base: "https://api.deerapi.com/v1"
+
+models:
+  extraction_model: grok-4-1-fast-non-reasoning
+  generation_model: grok-4-1-fast-non-reasoning
+
+  extraction_temperature: 0.3
+  generation_temperature: 0.2
+  worldbook_temperature: 0.2
+
+  max_tokens: 60000
+  timeout: 300
+
+# --- 文件路径配置 ---
+input:
+  source_file: /home/st_book/novel/1.txt
+  encoding: utf-8
+
+output:
+  chunk_dir: chunks
+  mapping_file: chunks/mapping.json
+  character_responses_dir: character_responses
+  character_responses_raw_dir: character_responses_raw
+  character_responses_bad_dir: character_responses_bad
+  wb_responses_dir: wb_responses
+  wb_raw_responses_dir: wb_raw_responses
+  wb_bad_chunks_dir: wb_bad_chunks
+  roles_json_dir: roles_json
+  character_stats_file: character_stats.json
+  cards_dir: cards
+  worldbook_dir: worldbook
+
+# --- 文本分块与处理配置 ---
+text_processing:
+  max_chunk_chars: 60000
+  buffer_chars: 200
+  chapter_patterns:
+  - 第[一二三四五六七八九十百千万\d]+章
+  - 第[一二三四五六七八九十百千万\d]+节
+  - 第[一二三四五六七八九十百千万\d]+回
+  - 第[一二三四五六七八九十百千万\d]+部分
+  - Chapter \d+
+  - 章节 \d+
+
+# --- 网络与性能配置 ---
+performance:
+  max_concurrent: 3
+  retry_limit: 5
+  retry_delay: 10
+  rate_limit_delay: 5
+  batch_size: 1
+
+# --- 缓存配置 ---
+cache:
+  enable_cache: true
+  cache_dir: cache
+  cache_expiry_days: 30
+
+# --- 核心Prompt优化 ---
+character_extraction_prompt: |
+  <role>
+  你是一位资深的角色分析师和心理侧写师。你的任务是从以下小说段落中，精准地提取并结构化所有出现的角色信息。请记住，你的输出将作为构建一个复杂角色关系网络的基础数据。
+  </role>
+
+  <task>
+  请严格按照以下JSON数组格式输出，直接输出JSON内容，不要包含任何Markdown标记或解释性文字。
+
+  对于段落中的每一个角色，提取以下信息：
+  - "name": 角色的主要姓名。
+  - "aliases": (数组) 角色的所有别名、代称、外号或他人对其的特殊称呼（例如"那个高个子"、"队长"）。这对于后续角色识别至关重要。
+  - "features": (字符串) 角色的外貌、衣着或其他显著的物理特征。
+  - "personality": (字符串) 角色的核心性格特质，请使用精准的描述性词语（如"果断但多疑"、"外表冷漠内心柔软"）。
+  - "quote": (字符串) 挑选一句最能体现其性格或说话习惯的代表性对话。
+  - "motivation": (字符串, 可选) 推断该角色在当前场景下的主要动机或目标是什么？
+  - "relationships": (对象数组, 可选) 描述该角色与其他角色的已知关系。每个对象包含 "target_name" 和 "relation_type" (例如：{"target_name": "李雷", "relation_type": "对手"})。
+  </task>
+
+  <example_format>
+  [
+    {
+      "name": "主角A",
+      "aliases": ["队长", "阿A"],
+      "features": "身材高大，右眼角有一道浅浅的疤痕，常穿一件磨损的皮夹克。",
+      "personality": "沉着冷静，不善言辞，但在关键时刻极具决断力。",
+      "quote": ""废话少说，按计划行动。"",
+      "motivation": "找到失踪的妹妹。",
+      "relationships": [
+        {
+          "target_name": "配角B",
+          "relation_type": "不信任的盟友"
+        }
+      ]
+    }
+  ]
+  </example_format>
+
+worldbook_extraction_prompt: |
+  <role>
+  你是一位知识考古学家和世界观分类学者。你的任务是从以下小说段落中，挖掘出所有构成世界观的专有名词和核心概念。你的输出将用于构建一个有机关联的世界设定集。
+  </role>
+
+  <task>
+  请严格按照以下JSON数组格式输出，直接输出JSON内容，不要包含任何Markdown标记或解释性文字。
+
+  对于段落中的每一个设定，提取以下信息：
+  - "name": (字符串) 专有名词的名称。
+  - "type": (枚举字符串) 从 ["人物", "地点", "物品", "技能", "组织", "历史事件", "法则/概念", "种族/生物"] 中选择一个最合适的类型。
+  - "description": (字符串) 详细描述该设定的背景、外观、功能或定义。
+  - "importance": (整数, 1-10) 评估该设定在当前文段乃至整个故事中的重要程度，10为最重要。
+  - "keywords": (字符串数组) 列出可能触发此条目的相关词汇或同义词。
+  - "relationships": (字符串, 可选) 简要描述该条目与其他设定的已知关联（例如："是「A组织」的圣物"，"在「B事件」中被摧毁"）。这是构建世界体系的关键。
+  - "impact": (字符串, 可选) 推断该设定对角色或世界产生了什么具体的影响？（例如："让主角获得了「飞行」能力"，"导致了王国的覆灭"）。
+  </task>
+
+  <example_format>
+  [
+    {
+      "name": "低语森林",
+      "type": "地点",
+      "description": "一片笼罩在恒久薄雾中的古老森林，其中的树木会发出类似梦呓的低语。外人进入后极易迷失方向。",
+      "importance": 8,
+      "keywords": ["森林", "迷雾之地", "低语之地"],
+      "relationships": "是「月影德鲁伊」教派的隐居地。",
+      "impact": "为主角提供了一个躲避追捕的天然屏障，同时也是获取稀有草药'月光苔'的唯一途径。"
+    }
+  ]
+  </example_format>
+
+# --- 名称规范化与语义匹配 ---
+name_normalization:
+  enable: true
+  merge_similar_names: true
+  name_mappings: {}
+
+# --- SillyTavern 世界书生成配置 ---
+sillytavern_worldbook:
+  name: 自动生成世界书
+  description: 由 nana 定制
+  scan_depth: 4
+  token_budget: 400
+  recursive_scanning: true
+  case_sensitive: false
+  match_whole_words: false
+  default_entry:
+    order: 100
+    position: 0
+    probability: 100
+    depth: 4
+    enabled: true
+
+# --- SillyTavern 世界书智能参数自动化配置 ---
+worldbook_automation:
+  enable: true
+  order_weights:
+    主角: 10
+    核心伙伴: 20
+    主要反派: 20
+    重要配角: 30
+    核心组织: 40
+    修炼体系: 50
+    核心概念: 50
+    地理区域: 60
+    历史事件: 70
+    重要物品: 80
+    普通角色: 90
+    默认: 100
+    普通物品: 110
+    背景设定: 120
+  constant_types:
+  - 主角
+  - 核心伙伴
+  - 修炼体系
+  - 核心概念
+  - 核心组织
+  selective_threshold: 800
+  selective_force_types:
+  - 历史事件
+  - 地理区域
+  - 背景设定
+  addmemo_keywords:
+  - "注意"
+  - "重要"
+  - "禁止"
+  - "必须"
+  - "规则"
+  - "限制"
+  - "警告"
+  depth_mapping:
+    主角: 2
+    核心伙伴: 2
+    主要反派: 3
+    核心组织: 3
+    修炼体系: 4
+    默认: 4
+    背景设定: 6
+  probability_mapping:
+    主角: 100
+    核心伙伴: 100
+    主要反派: 95
+    重要配角: 90
+    核心组织: 85
+    修炼体系: 90
+    核心概念: 85
+    默认: 80
+    背景设定: 70
+  content_length_adjustments:
+    short_content_threshold: 200
+    long_content_threshold: 1000
+    short_content_probability_boost: 10
+    long_content_depth_increase: 1
+  keyword_density_analysis:
+    enable: true
+    high_density_threshold: 0.05
+    high_density_order_boost: -10
+  chinese_webnovel_optimization:
+    enable: true
+    cultivation_keywords:
+    - "境界"
+    - "修为"
+    - "功法"
+    - "丹药"
+    - "灵气"
+    - "元婴"
+    - "金丹"
+    - "筑基"
+    power_system_boost: -20
+    relationship_keywords:
+    - "师父"
+    - "弟子"
+    - "师兄"
+    - "师姐"
+    - "宗门"
+    - "门派"
+
+# --- 事件驱动架构配置 ---
+event_driven_architecture:
+  enable: true
+  event_extraction:
+    significance_criteria:
+      plot_advancement: "推动主线剧情发展"
+      character_development: "角色成长或转变"
+      world_building: "揭示世界观设定"
+      relationship_change: "改变角色关系"
+      power_system: "涉及修炼体系或能力"
+      conflict_resolution: "解决重要冲突"
+    event_types:
+    - "战斗事件"
+    - "修炼突破"
+    - "情感转折"
+    - "阴谋揭露"
+    - "势力变动"
+    - "宝物获得"
+    - "地点探索"
+    - "关系建立"
+    - "危机解决"
+    - "背景揭示"
+  timeline_construction:
+    timeline_layers:
+      overview: "故事总览时间线"
+      character: "角色发展时间线"
+      faction: "势力变动时间线"
+      world: "世界观演进时间线"
+    event_correlation:
+      participant_weight: 0.4
+      location_weight: 0.2
+      temporal_weight: 0.3
+      causal_weight: 0.5
+    entity_timeline:
+      min_appearances: 3
+      significance_threshold: 5
+      max_timeline_entries: 20
+  layered_worldbook:
+    overview_layer:
+      order_range: [ 1, 20 ]
+      constant: true
+      depth: 2
+      probability: 100
+    entity_layer:
+      order_range: [ 21, 60 ]
+      constant: true
+      depth: 3
+      probability: 95
+    event_layer:
+      order_range: [ 61, 120 ]
+      constant: false
+      depth: 4
+      probability: 80
+  backward_compatibility:
+    fallback_to_entity_mode: true
+    preserve_entity_extraction: true
+    hybrid_mode: false
+
+# --- 世界规则层配置 ---
+world_rules:
+  enable_extraction: true
+  rule_extraction:
+    rule_types:
+    - "物理法则"
+    - "魔法体系"
+    - "修炼体系"
+    - "神明设定"
+    - "种族设定"
+    - "社会规则"
+    - "地理背景"
+    - "历史背景"
+    - "经济体系"
+    - "技术水平"
+    importance_criteria:
+      fundamental_law: "影响整个世界运行的基础法则"
+      power_system: "角色能力和成长的核心机制"
+      social_order: "社会运行和角色互动的基础"
+      world_background: "世界观的重要背景设定"
+      cultural_element: "丰富世界文化的特色元素"
+    extraction_prompt: |
+      你是一个世界观架构师，专门从小说文本中提取构成世界基础的规则和设定。
+
+      **提取目标**：识别文本中体现的世界运行规则，而非具体事件。
+
+      **规则分类**：
+      - 物理法则：重力、时间、空间等基础物理规律
+      - 魔法体系：魔法原理、法术分类、魔力来源、施法规则
+      - 修炼体系：境界等级、修炼方法、突破条件、能力获得
+      - 神明设定：神祇体系、神力规则、信仰机制、神迹表现
+      - 种族设定：各种族特征、天赋能力、文化背景、生理特点
+      - 社会规则：政治制度、法律体系、社会习俗、等级秩序
+      - 地理背景：世界地理、气候环境、地域特色、空间结构
+      - 历史背景：重大历史、时代变迁、文明发展、传说起源
+      - 经济体系：货币制度、贸易规则、资源分配、价值体系
+      - 技术水平：科技发展、工艺水平、创新能力、技术限制
+
+      **输出格式**：
+      [
+        {
+          "rule_summary": "规则的简洁描述（20字以内）",
+          "rule_type": "规则分类（从上述分类中选择）",
+          "description": "规则的详细说明和运行机制",
+          "importance": 8,
+          "evidence": "文本中体现此规则的具体证据",
+          "implications": "此规则对世界和角色的影响",
+          "scope": "规则的适用范围（全世界/特定地区/特定群体）"
+        }
+      ]
+
+  layered_worldbook:
+    rules_layer:
+      order_range: [ 0, 20 ]
+      constant: true
+      depth: 2
+      probability: 100
+      comment_prefix: "【世界规则】"
+    timeline_layer:
+      order: 21
+      constant: true
+      depth: 3
+      probability: 100
+      comment: "【故事总览】时间线"
+    entity_layer:
+      order_range: [ 30, 50 ]
+      constant: true
+      depth: 3
+      probability: 95
+      comment_prefix: "【核心实体】"
+    event_layer:
+      order_base: 110
+      constant: false
+      depth: 4
+      probability: 80
+      comment_prefix: "【事件】"
+  rule_integration:
+    similarity_threshold: 0.7
+    min_importance: 5
+    max_rules_per_type: 5
+
+# --- 角色卡生成配置 ---
+character_card:
+  generate_mes_example: true
+  generate_alternate_greetings: true
+  generate_system_prompt: true
+  extract_tags: true
+  alternate_greetings_count: 3
+  max_tags: 10
+  creator: nala
+  character_version: '1.0'
+
+# --- 日志与调试配置 ---
+logging:
+  log_file: logs/st_book.log
+  log_level: INFO
+  log_format: '[{asctime}] {levelname}: {message}'
+  style: '{'
+  verbose_logging: true
+
+debug:
+  test_mode: false
+  max_test_chunks: 5
+
+# --- 相似度阈值统一配置 ---
+similarity:
+  name_threshold: 0.95
+  content_threshold: 0.85
+  name_boost_threshold: 0.95
+  merge_threshold: 0.9
+
+# --- 验证参数配置 ---
+validation:
+  min_character_name_length: 2
+  min_content_length: 20
+  max_entries: 2000
+  max_features_per_character: 5
+  max_dialogues_per_character: 3
+
+# --- 角色筛选配置 ---
+character_filter:
+  keep_count: 30
+  backup_filtered: true
+
+# --- 错误处理配置 ---
+error_handling:
+  continue_on_error: true
+  save_error_details: true
+  max_consecutive_errors: 5
+
+# --- 输出格式配置 ---
+output_format:
+  ensure_ascii: false
+  indent: 2
+  sort_keys: false
+
+# --- GUI应用配置 ---
+gui:
+  window_geometry: "1000x800"
+  log_height: 15
+  config_file_name: "config.yaml"
+  workflow_script_name: "character_workflow.py"
+
+# --- 文件转换配置 ---
+conversion:
+  worldbook_input_filename: "layered_worldbook.json"
+  worldbook_output_filename: "worldbook_st_v2.json"
+  worldbook_conversion_dir: "worldbook"
+
+# --- 实验性功能 ---
+experimental:
+  enable_batch_processing: true
+  enable_smart_chunking: true
+  enable_character_relationships: true
